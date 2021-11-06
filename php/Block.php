@@ -55,74 +55,117 @@ class Block {
 	}
 
 	/**
-	 * Renders the block.
+	 * Renders the block to show post types and their counts.
+	 * Also shows 5 posts created between 9AM to 5PM with category baz and tag foo.
 	 *
 	 * @param array    $attributes The attributes for the block.
-	 * @param string   $content    The block content, if any.
-	 * @param WP_Block $block      The instance of this block.
+	 * @param string   $content The block content, if any.
+	 * @param WP_Block $block The instance of this block.
+	 *
 	 * @return string The markup of the block.
 	 */
 	public function render_callback( $attributes, $content, $block ) {
-		$post_types = get_post_types(  [ 'public' => true ] );
-		$class_name = $attributes['className'];
-		ob_start();
+		$current_post_id      = get_the_ID();
+		$post_types           = get_post_types( [ 'public' => true ] );
+		$wrapper_markup       = '<div %1$s><ul>%2$s</ul><p>%3$s</p>%4$s</div>';
+		$post_types_markup    = '';
+		$foo_baz_posts_markup = '';
 
-		?>
-        <div class="<?php echo $class_name; ?>">
-			<h2>Post Counts</h2>
-			<ul>
-			<?php
-			foreach ( $post_types as $post_type_slug ) :
-                $post_type_object = get_post_type_object( $post_type_slug  );
-                $post_count = count(
-                    get_posts(
-						[
-							'post_type' => $post_type_slug,
-							'posts_per_page' => -1,
-						]
-					)
-                );
+		foreach ( $post_types as $post_type_slug ) {
+			$post_type_object = get_post_type_object( $post_type_slug );
+			$count_query      = new WP_Query(
+				[
+					'post_type'   => $post_type_slug,
+					'post_status' => 'publish',
+				]
+			);
+			$post_count       = $count_query->found_posts;
 
-				?>
-				<li><?php echo 'There are ' . $post_count . ' ' .
-					  $post_type_object->labels->name . '.'; ?></li>
-			<?php endforeach;	?>
-			</ul><p><?php echo 'The current post ID is ' . $_GET['post_id'] . '.'; ?></p>
+			$post_type_content = sprintf(
+				/* translators: %d: post count, %s: post name */
+				esc_html__( 'There are %1$d %2$s.', 'site-counts' ),
+				absint( $post_count ),
+				esc_html( $post_type_object->labels->name )
+			);
+			$post_types_markup = $post_types_markup . '<li>' . $post_type_content . '</li>';
+		}
 
-			<?php
-			$query = new WP_Query(  array(
-				'post_type' => ['post', 'page'],
-				'post_status' => 'any',
-				'date_query' => array(
-					array(
-						'hour'      => 9,
-						'compare'   => '>=',
-					),
-					array(
-						'hour' => 17,
-						'compare'=> '<=',
-					),
-				),
-                'tag'  => 'foo',
-                'category_name'  => 'baz',
-				  'post__not_in' => [ get_the_ID() ],
-			));
+		$query = new WP_Query(
+			[
+				'posts_per_page' => 6,
+				'post_type'      => 'post',
+				'post_status'    => 'publish',
+				'date_query'     => [
+					[
+						'hour'    => 9,
+						'compare' => '>=',
+					],
+					[
+						'hour'    => 17,
+						'compare' => '<=',
+					],
+				],
+				'tag'            => 'foo',
+				'category_name'  => 'baz',
+			]
+		);
 
-			if ( $query->found_posts ) :
-				?>
-				 <h2>5 posts with the tag of foo and the category of baz</h2>
-                <ul>
-                <?php
+		if ( $query->have_posts() ) {
+			$foo_baz_posts_content = '';
 
-                 foreach ( array_slice( $query->posts, 0, 5 ) as $post ) :
-                    ?><li><?php echo $post->post_title ?></li><?php
-				endforeach;
-			endif;
-		 	?>
-			</ul>
-		</div>
-		<?php
+			while ( $query->have_posts() ) {
+				$query->the_post();
+				if ( $current_post_id && get_the_ID() === $current_post_id ) {
+					continue;
+				}
 
-		return ob_get_clean();
+				$foo_baz_posts_content = $foo_baz_posts_content . '<li> ' . esc_html( $query->post->post_title ) . ' </li>';
+			}
+
+			$foo_baz_heading      = esc_html__( '5 posts with the tag of foo and the category of baz', 'site-counts' );
+			$foo_baz_posts_markup = sprintf(
+				'<h2>%1$s</h2><ul>%2$s</ul>',
+				$foo_baz_heading,
+				$foo_baz_posts_content
+			);
+		}
+
+		$colors          = block_core_page_list_build_css_colors( $block->context );
+		$font_sizes      = block_core_page_list_build_css_font_sizes( $block->context );
+		$classes         = array_merge( $colors['css_classes'], $font_sizes['css_classes'] );
+		$style_attribute = ( $colors['inline_styles'] . $font_sizes['inline_styles'] );
+		$css_classes     = trim( implode( ' ', $classes ) );
+
+		$wrapper_attributes = get_block_wrapper_attributes(
+			[
+				'class' => $css_classes,
+				'style' => $style_attribute,
+			]
+		);
+
+		$current_post_markup = sprintf(
+			/* translators: %d: current post ID */
+			esc_html__( 'The current post ID is %d', 'site-counts' ),
+			absint( $current_post_id )
+		);
+
+		$wrapper_markup = apply_filters(
+			'sitecounts_block_markup',
+			$wrapper_markup,
+			$wrapper_attributes,
+			$post_types_markup,
+			$current_post_markup,
+			$foo_baz_posts_markup
+		);
+
+		$final_markup = sprintf(
+			$wrapper_markup,
+			$wrapper_attributes,
+			$post_types_markup,
+			$current_post_markup,
+			$foo_baz_posts_markup
+		);
+
+		return apply_filters( 'sitecounts_block_content', $final_markup );
 	}
 }
